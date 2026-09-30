@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monster Integration Challenge</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- TensorFlow.js and Handpose for Hand Tracking -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
+    
+    <!-- KaTeX for beautiful math rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+    
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #2d3748; 
+            color: #e2e8f0;
+            overflow: hidden; 
+            margin: 0;
+            padding: 0;
+        }
+        
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .scene {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            background: linear-gradient(to bottom, #4a5568, #1a202c);
+            overflow: hidden;
+        }
+
+        .ground {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            height: 20%;
+            background-color: #38a169; 
+            border-top: 5px solid #276749;
+        }
+
+        .monster {
+            position: absolute;
+            bottom: 10%; 
+            left: 20px; /* Moved to left side under camera */
+            width: 200px;
+            height: 200px;
+            transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            z-index: 5;
+        }
+
+        .monster svg {
+            width: 100%;
+            height: 100%;
+            display: block;
+            filter: drop-shadow(0 0 10px rgba(0, 0, 0, 0.6));
+        }
+
+        /* The Lunge Attack Animation (Now lunging RIGHT into the screen) */
+        .monster.attack {
+            transform: translateX(40vw) scale(4.5) translateY(-5vh);
+            transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            z-index: 100;
+        }
+
+        body.damage {
+            animation: redFlash 0.3s, shake 0.4s cubic-bezier(.36,.07,.19,.97) both;
+        }
+
+        @keyframes redFlash {
+            0% { background-color: #2d3748; }
+            50% { background-color: #742a2a; } 
+            100% { background-color: #2d3748; }
+        }
+
+        @keyframes shake {
+            10%, 90% { transform: translate3d(-10px, 0, 0); }
+            20%, 80% { transform: translate3d(20px, 0, 0); }
+            30%, 50%, 70% { transform: translate3d(-30px, 15px, 0); }
+            40%, 60% { transform: translate3d(30px, -15px, 0); }
+        }
+
+        /* Left Side Elements */
+        #webcam-container {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            border: 4px solid #4a5568;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            background-color: #000;
+            z-index: 20;
+            width: 200px;
+        }
+        
+        #webcam-container canvas {
+            display: block;
+        }
+
+        .hud {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            font-size: 1.25rem;
+            background: rgba(0, 0, 0, 0.4);
+            padding: 8px 16px;
+            border-radius: 8px;
+        }
+
+        .life { color: #fc8181; }
+        .life.lost { color: #718096; }
+
+        #detected-gesture {
+             position: absolute;
+             top: 235px; /* Moved up directly below the webcam */
+             left: 20px;
+             width: 200px;
+             background: rgba(0,0,0,0.7);
+             padding: 10px;
+             border-radius: 5px;
+             font-size: 1rem;
+             color: #ecc94b;
+             z-index: 20;
+             box-sizing: border-box;
+             text-align: center;
+        }
+
+        #question-panel {
+            position: absolute;
+            left: 260px; /* Clear the left column (camera + HUD + dino) */
+            right: 40px;
+            top: 50%;
+            transform: translateY(-50%);
+            background-color: rgba(26, 32, 44, 0.9);
+            padding: 2.5rem;
+            border-radius: 1rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.7);
+            text-align: center;
+            z-index: 10;
+        }
+
+        .math-text {
+            font-size: 2.5rem;
+            margin: 1.5rem 0;
+            color: #63b3ed;
+            display: flex;
+            justify-content: center;
+        }
+
+        .options-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .option {
+            background-color: #2d3748;
+            border: 2px solid #4a5568;
+            padding: 1.5rem;
+            border-radius: 0.5rem;
+            font-size: 1.6rem; 
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            overflow-x: auto; 
+            cursor: pointer;
+            min-height: 80px;
+        }
+
+        .option-number {
+            background-color: #4a5568;
+            color: white;
+            width: 35px;
+            height: 35px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            margin-right: 15px;
+            font-weight: bold;
+            font-size: 1.4rem;
+            flex-shrink: 0;
+        }
+        
+        .option.selected {
+             border-color: #ecc94b;
+             background-color: rgba(236, 201, 75, 0.2);
+        }
+
+        .option.correct {
+            border-color: #48bb78;
+            background-color: rgba(72, 187, 120, 0.2);
+        }
+
+        .option.wrong {
+            border-color: #f56565;
+            background-color: rgba(245, 101, 101, 0.2);
+        }
+
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 50;
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .hidden { display: none !important; }
+
+        .btn {
+            background-color: #4299e1;
+            color: white;
+            padding: 0.75rem 2rem;
+            border-radius: 0.5rem;
+            font-size: 1.25rem;
+            font-weight: bold;
+            border: none;
+            cursor: pointer;
+            margin-top: 1.5rem;
+            transition: background-color 0.2s;
+        }
+        
+        .btn:hover { background-color: #3182ce; }
+
+        .loader {
+          border: 4px solid #f3f3f3;
+          border-top: 4px solid #3498db;
+          border-radius: 50%;
+          width: 30px;
+          height: 30px;
+          animation: spin 1s linear infinite;
+          margin: 10px auto;
+        }
+
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- Background Scene -->
+        <div class="scene">
+            <div class="ground"></div>
+            
+            <!-- Random Monster on Left Side -->
+            <div id="monster-sprite" class="monster">
+                <!-- SVG dynamically injected -->
+            </div>
+        </div>
+
+        <!-- Webcam and Detection on Left Side -->
+        <div id="webcam-container" class="hidden">
+            <video id="webcam-video" autoplay playsinline width="200" height="200" style="transform: scaleX(-1); border-radius: 4px;"></video>
+        </div>
+        <div id="detected-gesture" class="hidden">Detecting...</div>
+
+        <!-- Main Question Panel taking up Right Space -->
+        <div id="question-panel" class="hidden">
+            <div class="flex justify-between items-center mb-4 pb-4 border-b border-gray-600">
+                <h2 class="text-3xl font-bold">Integrate the following:</h2>
+                
+                <!-- Level and Lives moved next to the question -->
+                <div class="hud hidden" id="hud">
+                    <div id="level-display" class="font-bold text-blue-300">Level: 1/10</div>
+                    <div id="lives-display" class="flex gap-1">
+                        <span class="life">♥</span>
+                        <span class="life">♥</span>
+                        <span class="life">♥</span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="question-text" class="math-text"></div>
+            
+            <div class="options-grid" id="options-container">
+                <!-- Options injected via JS -->
+            </div>
+            
+            <div id="feedback-msg" class="mt-6 text-2xl font-bold h-8"></div>
+        </div>
+
+        <!-- Start Screen -->
+        <div id="start-screen" class="overlay">
+            <h1 class="text-5xl font-bold mb-4 text-purple-400">Monster Integration Challenge</h1>
+            <p class="text-xl mb-4 max-w-2xl">Use your camera to answer basic integration problems.<br>Show 1, 2, 3, or 4 fingers to select an option.</p>
+            <p class="text-lg text-red-400 mb-6 font-bold">Warning: Wrong answers anger the monsters!</p>
+            
+            <div id="model-loading" class="mb-4">
+                <div class="loader"></div>
+                <p>Loading AI gesture detection model...</p>
+            </div>
+            
+            <button id="start-btn" class="btn hidden">Start Game</button>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="game-over-screen" class="overlay hidden">
+            <h1 class="text-6xl font-bold mb-4 text-red-500">YOU DIED</h1>
+            <p class="text-2xl mb-6">The monster got you!</p>
+            <button id="restart-btn" class="btn">Try Again</button>
+        </div>
+
+        <!-- Victory Screen -->
+        <div id="victory-screen" class="overlay hidden">
+            <h1 class="text-6xl font-bold mb-4 text-green-400">SURVIVED!</h1>
+            <p class="text-2xl mb-6">You escaped the monsters and mastered basic integration!</p>
+            <button id="play-again-btn" class="btn">Play Again</button>
+        </div>
+
+    </div>
+
+    <script type="text/javascript">
+        let currentLevel = 1;
+        const maxLevel = 10;
+        let lives = 3;
+        let currentQuestion = null;
+        let isProcessingAnswer = false; 
+        let selectedOptionIndex = -1;
+        
+        let model;
+        let video = null;
+        let confirmationTimer = null;
+        const confirmationDelay = 1500; 
+
+        const startScreen = document.getElementById('start-screen');
+        const startBtn = document.getElementById('start-btn');
+        const modelLoading = document.getElementById('model-loading');
+        const gamePanel = document.getElementById('question-panel');
+        const webcamContainer = document.getElementById('webcam-container');
+        const hud = document.getElementById('hud');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const victoryScreen = document.getElementById('victory-screen');
+        const questionText = document.getElementById('question-text');
+        const optionsContainer = document.getElementById('options-container');
+        const feedbackMsg = document.getElementById('feedback-msg');
+        const livesDisplay = document.getElementById('lives-display');
+        const levelDisplay = document.getElementById('level-display');
+        const monsterSprite = document.getElementById('monster-sprite');
+        const detectedGestureDiv = document.getElementById('detected-gesture');
+
+        const monsters = [
+            /* Cyclops Demon */
+            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M50 90 C 20 90, 10 60, 10 40 C 10 20, 30 10, 50 10 C 70 10, 90 20, 90 40 C 90 60, 80 90, 50 90 Z" fill="#e53e3e"/><circle cx="50" cy="40" r="15" fill="#fff"/><circle cx="50" cy="40" r="5" fill="#1a202c"/><path d="M 35 25 L 65 35" stroke="#1a202c" stroke-width="4" stroke-linecap="round"/><path d="M 30 70 L 40 60 L 50 70 L 60 60 L 70 70" fill="none" stroke="#fff" stroke-width="4" stroke-linejoin="round"/></svg>`,
+            /* Tentacle Alien */
+            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="45" r="30" fill="#805ad5"/><circle cx="35" cy="40" r="8" fill="#fff"/><circle cx="35" cy="40" r="3" fill="#000"/><circle cx="65" cy="40" r="8" fill="#fff"/><circle cx="65" cy="40" r="3" fill="#000"/><path d="M 20 60 Q 10 90 25 85 Q 20 70 30 65" fill="none" stroke="#805ad5" stroke-width="8" stroke-linecap="round"/><path d="M 40 70 Q 35 95 50 95 Q 55 80 50 70" fill="none" stroke="#805ad5" stroke-width="8" stroke-linecap="round"/><path d="M 60 70 Q 65 95 50 95 Q 45 80 50 70" fill="none" stroke="#805ad5" stroke-width="8" stroke-linecap="round"/><path d="M 80 60 Q 90 90 75 85 Q 80 70 70 65" fill="none" stroke="#805ad5" stroke-width="8" stroke-linecap="round"/></svg>`,
+            /* Green Sludge */
+            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M 15 80 C 15 50, 30 30, 50 30 C 70 30, 85 50, 85 80 C 85 95, 15 95, 15 80 Z" fill="#38a169"/><circle cx="35" cy="60" r="6" fill="#fff"/><circle cx="35" cy="60" r="2" fill="#000"/><circle cx="65" cy="60" r="6" fill="#fff"/><circle cx="65" cy="60" r="2" fill="#000"/><path d="M 40 75 Q 50 85 60 75" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg>`
+        ];
+
+        async function initModel() {
+            video = document.getElementById('webcam-video');
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 200, height: 200 } });
+                video.srcObject = stream;
+                
+                await new Promise((resolve) => {
+                    video.onloadedmetadata = () => resolve(video);
+                });
+                video.play();
+
+                model = await handpose.load();
+                
+                modelLoading.classList.add('hidden');
+                startBtn.classList.remove('hidden');
+                window.requestAnimationFrame(loop);
+            } catch (e) {
+                console.error(e);
+                modelLoading.innerHTML = `
+                    <div class="text-red-400 font-bold p-4 bg-red-900 bg-opacity-50 rounded">
+                        <p>Camera access denied or model failed to load.</p>
+                        <p class="text-sm mt-2">Allow camera access and refresh the page.</p>
+                    </div>`;
+            }
+        }
+
+        async function loop() {
+            if (!isProcessingAnswer && gamePanel.classList.contains('hidden') === false) {
+                 await predict();
+            }
+            window.requestAnimationFrame(loop);
+        }
+
+        async function predict() {
+            if (!model || !video || video.readyState < 2) return;
+            const hands = await model.estimateHands(video);
+            
+            if (hands.length > 0) {
+                const hand = hands[0];
+                const fingers = [
+                    hand.annotations.indexFinger,
+                    hand.annotations.middleFinger,
+                    hand.annotations.ringFinger,
+                    hand.annotations.pinky
+                ];
+                
+                let extendedCount = 0;
+                fingers.forEach(finger => {
+                    const tipY = finger[3][1];
+                    const pipY = finger[1][1];
+                    if (tipY < pipY - 10) extendedCount++;
+                });
+
+                if (extendedCount >= 1 && extendedCount <= 4) {
+                    detectedGestureDiv.innerText = `Detected: ${extendedCount} Finger(s)`;
+                    let optionIndex = extendedCount - 1; 
+                    if (optionIndex !== selectedOptionIndex) {
+                        highlightOption(optionIndex);
+                        startConfirmationTimer(optionIndex);
+                    }
+                } else {
+                    detectedGestureDiv.innerText = "Show 1, 2, 3, or 4 fingers.";
+                    clearSelection();
+                }
+            } else {
+                detectedGestureDiv.innerText = "No hand detected.";
+                clearSelection();
+            }
+        }
+
+        function highlightOption(index) {
+            clearSelection();
+            selectedOptionIndex = index;
+            const options = document.querySelectorAll('.option');
+            if (options[index]) options[index].classList.add('selected');
+        }
+
+        function clearSelection() {
+            selectedOptionIndex = -1;
+            if (confirmationTimer) {
+                clearTimeout(confirmationTimer);
+                confirmationTimer = null;
+            }
+            document.querySelectorAll('.option').forEach(opt => opt.classList.remove('selected'));
+        }
+
+        function startConfirmationTimer(index) {
+            if (confirmationTimer) clearTimeout(confirmationTimer);
+            confirmationTimer = setTimeout(() => {
+                if (selectedOptionIndex === index && !isProcessingAnswer) {
+                    handleAnswer(index);
+                }
+            }, confirmationDelay);
+        }
+
+        function gcd(a, b) {
+            a = Math.abs(a); b = Math.abs(b);
+            while (b) { let t = b; b = a % b; a = t; }
+            return Math.max(1, a);
+        }
+
+        class Frac {
+            constructor(n, d = 1) {
+                let sign = (n * d < 0) ? -1 : 1;
+                let gc = gcd(n, d);
+                this.n = sign * Math.abs(n) / gc;
+                this.d = Math.abs(d) / gc;
+            }
+            add(other) { return new Frac(this.n * other.d + other.n * this.d, this.d * other.d); }
+            mul(other) { return new Frac(this.n * other.n, this.d * other.d); }
+            div(other) { return new Frac(this.n * other.d, this.d * other.n); }
+        }
+
+        function formatTerm(c, p) {
+            if (c.n === 0) return "0";
+            let signStr = c.n < 0 ? "-" : "";
+            let absN = Math.abs(c.n);
+
+            if (p.n === 0) {
+                return c.d === 1 ? c.n.toString() : `${signStr}\\frac{${absN}}{${c.d}}`;
+            }
+
+            let pStr = "";
+            if (p.d === 1) {
+                if (p.n === 1) pStr = "x";
+                else pStr = `x^{${p.n}}`;
+            } else {
+                if (p.n === 1 && p.d === 2) pStr = "\\sqrt{x}";
+                else pStr = `x^{\\frac{${p.n}}{${p.d}}}`;
+            }
+
+            let cStr = "";
+            if (c.d === 1) {
+                if (absN === 1) cStr = signStr;
+                else cStr = c.n.toString();
+            } else {
+                cStr = `${signStr}\\frac{${absN}}{${c.d}}`;
+            }
+            
+            if (cStr === "-" && pStr === "") return "-1"; 
+            return cStr + pStr;
+        }
+
+        function integrateTermStr(c, p) {
+            if (p.n === -1 && p.d === 1) {
+                let cStr = formatTerm(c, new Frac(0, 1));
+                if (cStr === "1") cStr = "";
+                else if (cStr === "-1") cStr = "-";
+                return `${cStr}\\ln|x|`;
+            }
+            let newP = p.add(new Frac(1, 1));
+            let newC = c.div(newP);
+            return formatTerm(newC, newP);
+        }
+
+        function deriveTermStr(c, p) {
+            if (p.n === 0) return "0";
+            let newP = p.add(new Frac(-1, 1));
+            let newC = c.mul(p);
+            return formatTerm(newC, newP);
+        }
+
+        function integrateError1Str(c, p) {
+            if (p.n === -1 && p.d === 1) return formatTerm(c, new Frac(-2, 1));
+            let newP = p.add(new Frac(1, 1));
+            return formatTerm(c, newP);
+        }
+
+        function integrateError2Str(c, p) {
+            if (p.n === -1 && p.d === 1) return formatTerm(c, new Frac(-2, 1));
+            let newP = p.add(new Frac(-1, 1));
+            let newC = c.div(newP);
+            return formatTerm(newC, newP);
+        }
+
+        function joinTerms(...terms) {
+            let nonZero = terms.filter(t => t !== "0");
+            if (nonZero.length === 0) return "0";
+            let str = nonZero[0];
+            for (let i = 1; i < nonZero.length; i++) {
+                if (nonZero[i].startsWith("-")) str += " - " + nonZero[i].substring(1);
+                else str += " + " + nonZero[i];
+            }
+            return str;
+        }
+
+        const rInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+        const rSign = () => Math.random() < 0.5 ? 1 : -1;
+        const rNonZero = (min, max) => { let v = 0; while (v === 0) v = rInt(min, max); return v; };
+
+        function generateTerm(level) {
+            let cN = 1, cD = 1, pN = 1, pD = 1;
+            if (level === 1) { cN = rInt(1, 6); pN = rInt(1, 3); }
+            else if (level === 2) { cN = rNonZero(-6, 6); pN = rInt(1, 4); }
+            else if (level === 3) { cN = rNonZero(-5, 5); cD = rInt(2, 4); pN = rInt(1, 4); }
+            else if (level === 4) { cN = rNonZero(-5, 5); pN = rInt(-4, -2); }
+            else if (level === 5) { cN = rNonZero(-4, 4); cD = rInt(2, 4); pN = rInt(-4, -2); }
+            else if (level === 6) { cN = rNonZero(-5, 5); pN = rSign(); pD = 2; } 
+            else if (level === 7) { cN = rNonZero(-4, 4); cD = rInt(2, 4); pN = rSign() * rInt(1, 3); pD = rInt(2, 3); }
+            else { cN = rNonZero(-5, 5); cD = rInt(1, 3); pN = rNonZero(-3, 3); pD = rInt(1, 3); }
+            
+            if (pN === -1 && pD === 1) pN = -2; 
+            if (pN === 0) pN = 1; 
+            return { c: new Frac(cN, cD), p: new Frac(pN, pD) };
+        }
+
+        function generateProblem(level) {
+            let expressionStr = "";
+            let correctAnswerStr = "";
+            let options = [];
+
+            if (level <= 6) {
+                let t = generateTerm(level);
+                expressionStr = `\\int ${formatTerm(t.c, t.p)} \\, dx`;
+                correctAnswerStr = integrateTermStr(t.c, t.p) + " + C";
+                
+                options.push(correctAnswerStr);
+                options.push(deriveTermStr(t.c, t.p) + " + C");
+                options.push(integrateError1Str(t.c, t.p) + " + C");
+                options.push(integrateError2Str(t.c, t.p) + " + C");
+            } else if (level <= 8) {
+                let l1 = rInt(2, level - 2); 
+                let l2 = level - l1;
+                let t1 = generateTerm(l1);
+                let t2 = generateTerm(l2);
+                while (t1.p.n * t2.p.d === t2.p.n * t1.p.d) t2 = generateTerm(l2);
+                
+                expressionStr = `\\int \\left( ${joinTerms(formatTerm(t1.c, t1.p), formatTerm(t2.c, t2.p))} \\right) \\, dx`;
+                correctAnswerStr = joinTerms(integrateTermStr(t1.c, t1.p), integrateTermStr(t2.c, t2.p)) + " + C";
+                
+                options.push(correctAnswerStr);
+                options.push(joinTerms(deriveTermStr(t1.c, t1.p), deriveTermStr(t2.c, t2.p)) + " + C"); 
+                options.push(joinTerms(integrateTermStr(t1.c, t1.p), integrateError1Str(t2.c, t2.p)) + " + C"); 
+                
+                let wrongSignT2 = integrateTermStr(t2.c, t2.p);
+                wrongSignT2 = wrongSignT2.startsWith("-") ? wrongSignT2.substring(1) : "-" + wrongSignT2;
+                options.push(joinTerms(integrateTermStr(t1.c, t1.p), wrongSignT2) + " + C");
+            } else {
+                let t1 = generateTerm(6); let t2 = generateTerm(4); let t3 = generateTerm(1); 
+                expressionStr = `\\int \\left( ${joinTerms(formatTerm(t1.c, t1.p), formatTerm(t2.c, t2.p), formatTerm(t3.c, t3.p))} \\right) \\, dx`;
+                correctAnswerStr = joinTerms(integrateTermStr(t1.c, t1.p), integrateTermStr(t2.c, t2.p), integrateTermStr(t3.c, t3.p)) + " + C";
+                
+                options.push(correctAnswerStr);
+                options.push(joinTerms(deriveTermStr(t1.c, t1.p), deriveTermStr(t2.c, t2.p), deriveTermStr(t3.c, t3.p)) + " + C");
+                options.push(joinTerms(integrateTermStr(t1.c, t1.p), deriveTermStr(t2.c, t2.p), integrateTermStr(t3.c, t3.p)) + " + C");
+                options.push(joinTerms(integrateError1Str(t1.c, t1.p), integrateError1Str(t2.c, t2.p), integrateError1Str(t3.c, t3.p)) + " + C");
+            }
+
+            const cleanStr = (s) => s.replace(/\+\s*-/g, '- ').replace(/--/g, '+ ');
+            
+            let finalOptions = [...new Set(options.map(opt => cleanStr(opt)))];
+            
+            while(finalOptions.length < 4) {
+                 let dummy = generateTerm(rInt(1, 5));
+                 finalOptions.push(cleanStr(integrateTermStr(dummy.c, dummy.p) + " + C"));
+                 finalOptions = [...new Set(finalOptions)];
+            }
+
+            for (let i = finalOptions.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [finalOptions[i], finalOptions[j]] = [finalOptions[j], finalOptions[i]];
+            }
+
+            const correctIndex = finalOptions.indexOf(cleanStr(correctAnswerStr));
+
+            return {
+                text: cleanStr(expressionStr),
+                options: finalOptions.slice(0, 4),
+                correctIndex: correctIndex !== -1 ? correctIndex : 0
+            };
+        }
+
+        function startGame() {
+            startScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+            victoryScreen.classList.add('hidden');
+            
+            gamePanel.classList.remove('hidden');
+            webcamContainer.classList.remove('hidden');
+            detectedGestureDiv.classList.remove('hidden');
+            hud.classList.remove('hidden');
+            
+            currentLevel = 1;
+            lives = 3;
+            updateHUD();
+            resetMonster();
+            randomizeMonster();
+            loadQuestion();
+        }
+
+        function updateHUD() {
+            levelDisplay.innerText = `Level: ${currentLevel}/${maxLevel}`;
+            livesDisplay.querySelectorAll('.life').forEach((heart, index) => {
+                if (index < lives) heart.classList.remove('lost');
+                else heart.classList.add('lost');
+            });
+        }
+
+        function loadQuestion() {
+            isProcessingAnswer = false;
+            clearSelection();
+            feedbackMsg.innerText = "";
+            feedbackMsg.className = "mt-6 text-2xl font-bold h-8";
+            
+            currentQuestion = generateProblem(currentLevel);
+            
+            katex.render(currentQuestion.text, questionText, { throwOnError: false, displayMode: true });
+            
+            optionsContainer.innerHTML = "";
+            currentQuestion.options.forEach((opt, index) => {
+                const div = document.createElement('div');
+                div.className = "option";
+                div.onclick = () => { if(!isProcessingAnswer) handleAnswer(index); };
+                
+                const numSpan = document.createElement('span');
+                numSpan.className = "option-number";
+                numSpan.innerText = index + 1;
+                
+                const mathSpan = document.createElement('span');
+                katex.render(opt, mathSpan, { throwOnError: false, displayMode: false });
+                
+                div.appendChild(numSpan);
+                div.appendChild(mathSpan);
+                optionsContainer.appendChild(div);
+            });
+        }
+
+        function handleAnswer(selectedIndex) {
+            if (isProcessingAnswer) return;
+            isProcessingAnswer = true;
+            
+            const options = document.querySelectorAll('.option');
+            
+            if (selectedIndex === currentQuestion.correctIndex) {
+                options[selectedIndex].classList.add('correct');
+                feedbackMsg.innerText = "Correct!";
+                feedbackMsg.classList.add('text-green-400');
+                
+                setTimeout(() => {
+                    currentLevel++;
+                    if (currentLevel > maxLevel) winGame();
+                    else { 
+                        updateHUD(); 
+                        randomizeMonster();
+                        loadQuestion(); 
+                    }
+                }, 1500);
+
+            } else {
+                options[selectedIndex].classList.add('wrong');
+                options[currentQuestion.correctIndex].classList.add('correct');
+                feedbackMsg.innerText = "Wrong! MONSTER ATTACKS!";
+                feedbackMsg.classList.add('text-red-500');
+                
+                triggerMonsterAttack();
+                
+                lives--;
+                updateHUD();
+                
+                setTimeout(() => {
+                    if (lives <= 0) loseGame();
+                    else {
+                        resetMonster();
+                        randomizeMonster();
+                        loadQuestion();
+                    }
+                }, 2000);
+            }
+        }
+
+        function triggerMonsterAttack() {
+            monsterSprite.classList.add('attack');
+            document.body.classList.add('damage'); 
+        }
+
+        function resetMonster() {
+            monsterSprite.classList.remove('attack');
+            document.body.classList.remove('damage');
+        }
+
+        function randomizeMonster() {
+            const randomSvg = monsters[Math.floor(Math.random() * monsters.length)];
+            monsterSprite.innerHTML = randomSvg;
+        }
+
+        function loseGame() {
+            gamePanel.classList.add('hidden');
+            gameOverScreen.classList.remove('hidden');
+        }
+
+        function winGame() {
+            gamePanel.classList.add('hidden');
+            victoryScreen.classList.remove('hidden');
+        }
+
+        startBtn.addEventListener('click', startGame);
+        document.getElementById('restart-btn').addEventListener('click', startGame);
+        document.getElementById('play-again-btn').addEventListener('click', startGame);
+
+        window.onload = initModel;
+    </script>
+</body>
+</html>
