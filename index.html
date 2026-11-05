@@ -16,6 +16,9 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
     
+    <!-- Three.js for 3D T-Rex Monster -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -56,22 +59,22 @@
             position: absolute;
             bottom: 10%; 
             left: 20px; /* Moved to left side under camera */
-            width: 200px;
-            height: 200px;
+            width: 220px;
+            height: 220px;
             transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275);
             z-index: 5;
         }
 
-        .monster svg {
-            width: 100%;
-            height: 100%;
+        .monster canvas {
+            width: 100% !important;
+            height: 100% !important;
             display: block;
-            filter: drop-shadow(0 0 10px rgba(0, 0, 0, 0.6));
+            filter: drop-shadow(0 0 12px rgba(0, 0, 0, 0.7));
         }
 
-        /* The Lunge Attack Animation (Now lunging RIGHT into the screen) */
+        /* The Lunge Attack Animation */
         .monster.attack {
-            transform: translateX(40vw) scale(4.5) translateY(-5vh);
+            transform: translateX(35vw) scale(3.5) translateY(-5vh);
             transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275);
             z-index: 100;
         }
@@ -348,6 +351,11 @@
         let confirmationTimer = null;
         const confirmationDelay = 1500; 
 
+        // 3D Scene Variables
+        let tRexScene, tRexCamera, tRexRenderer;
+        let tRexGroup, tRexJaw, tRexTail;
+        let animationFrameId;
+
         const startScreen = document.getElementById('start-screen');
         const startBtn = document.getElementById('start-btn');
         const modelLoading = document.getElementById('model-loading');
@@ -364,14 +372,183 @@
         const monsterSprite = document.getElementById('monster-sprite');
         const detectedGestureDiv = document.getElementById('detected-gesture');
 
-        const monsters = [
-            /* Cyclops Demon */
-            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M50 90 C 20 90, 10 60, 10 40 C 10 20, 30 10, 50 10 C 70 10, 90 20, 90 40 C 90 60, 80 90, 50 90 Z" fill="#e53e3e"/><circle cx="50" cy="40" r="15" fill="#fff"/><circle cx="50" cy="40" r="5" fill="#1a202c"/><path d="M 35 25 L 65 35" stroke="#1a202c" stroke-width="4" stroke-linecap="round"/><path d="M 30 70 L 40 60 L 50 70 L 60 60 L 70 70" fill="none" stroke="#fff" stroke-width="4" stroke-linejoin="round"/></svg>`,
-            /* Tentacle Alien */
-            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="45" r="30" fill="#805ad5"/><circle cx="35" cy="40" r="8" fill="#fff"/><circle cx="35" cy="40" r="3" fill="#000"/><circle cx="65" cy="40" r="8" fill="#fff"/><circle cx="65" cy="40" r="3" fill="#000"/><path d="M 20 60 Q 10 90 25 85 Q 20 70 30 65" fill="none" stroke="#805ad5" stroke-width="8" stroke-linecap="round"/><path d="M 40 70 Q 35 95 50 95 Q 55 80 50 70" fill="none" stroke="#805ad5" stroke-width="8" stroke-linecap="round"/><path d="M 60 70 Q 65 95 50 95 Q 45 80 50 70" fill="none" stroke="#805ad5" stroke-width="8" stroke-linecap="round"/><path d="M 80 60 Q 90 90 75 85 Q 80 70 70 65" fill="none" stroke="#805ad5" stroke-width="8" stroke-linecap="round"/></svg>`,
-            /* Green Sludge */
-            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M 15 80 C 15 50, 30 30, 50 30 C 70 30, 85 50, 85 80 C 85 95, 15 95, 15 80 Z" fill="#38a169"/><circle cx="35" cy="60" r="6" fill="#fff"/><circle cx="35" cy="60" r="2" fill="#000"/><circle cx="65" cy="60" r="6" fill="#fff"/><circle cx="65" cy="60" r="2" fill="#000"/><path d="M 40 75 Q 50 85 60 75" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg>`
+        // Color palettes for 3D T-Rex skin variations
+        const tRexSkins = [
+            { body: 0x2f855a, belly: 0x9ae6b4, eye: 0xecc94b }, // Jungle Green
+            { body: 0xc53030, belly: 0xfeb2b2, eye: 0xffffff }, // Crimson Red
+            { body: 0x6b46c1, belly: 0xd6bcfa, eye: 0xfc8181 }, // Fierce Purple
+            { body: 0xdd6b20, belly: 0xfbd38d, eye: 0x3182ce }  // Desert Orange
         ];
+
+        function init3DTRex() {
+            const container = monsterSprite;
+            container.innerHTML = ""; // Clear existing
+
+            // Setup Scene, Camera, Renderer
+            tRexScene = new THREE.Scene();
+            tRexCamera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+            tRexCamera.position.set(0, 1.2, 5);
+            tRexCamera.lookAt(0, 0.5, 0);
+
+            tRexRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+            tRexRenderer.setSize(220, 220);
+            tRexRenderer.shadowMap.enabled = true;
+            container.appendChild(tRexRenderer.domElement);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+            tRexScene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+            dirLight.position.set(5, 10, 7);
+            tRexScene.add(dirLight);
+
+            buildTRexMesh(tRexSkins[0]);
+            animate3DTRex();
+        }
+
+        function buildTRexMesh(skin) {
+            if (tRexGroup) tRexScene.remove(tRexGroup);
+
+            tRexGroup = new THREE.Group();
+
+            const mainMat = new THREE.MeshStandardMaterial({ color: skin.body, roughness: 0.6, metalness: 0.1 });
+            const bellyMat = new THREE.MeshStandardMaterial({ color: skin.belly, roughness: 0.8 });
+            const eyeMat = new THREE.MeshStandardMaterial({ color: skin.eye, roughness: 0.2 });
+            const toothMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3 });
+            const pupilMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+
+            // Torso / Body
+            const bodyGeo = new THREE.CylinderGeometry(0.7, 0.5, 1.4, 12);
+            const body = new THREE.Mesh(bodyGeo, mainMat);
+            body.rotation.z = -Math.PI / 6;
+            body.position.set(-0.2, 0.6, 0);
+            tRexGroup.add(body);
+
+            // Belly Overlay
+            const bellyGeo = new THREE.SphereGeometry(0.55, 12, 12);
+            const belly = new THREE.Mesh(bellyGeo, bellyMat);
+            belly.position.set(0.1, 0.5, 0);
+            belly.scale.set(0.8, 1.2, 0.8);
+            tRexGroup.add(belly);
+
+            // Neck & Head Base
+            const headGroup = new THREE.Group();
+            headGroup.position.set(0.5, 1.4, 0);
+
+            const skullGeo = new THREE.BoxGeometry(0.9, 0.5, 0.55);
+            const skull = new THREE.Mesh(skullGeo, mainMat);
+            skull.position.set(0.2, 0.2, 0);
+            headGroup.add(skull);
+
+            // Snout
+            const snoutGeo = new THREE.BoxGeometry(0.6, 0.4, 0.5);
+            const snout = new THREE.Mesh(snoutGeo, mainMat);
+            snout.position.set(0.8, 0.15, 0);
+            headGroup.add(snout);
+
+            // Eyes
+            const eyeGeo = new THREE.SphereGeometry(0.09, 8, 8);
+            const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
+            leftEye.position.set(0.3, 0.3, 0.28);
+            const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
+            rightEye.position.set(0.3, 0.3, -0.28);
+            
+            const pupilGeo = new THREE.SphereGeometry(0.04, 8, 8);
+            const leftPupil = new THREE.Mesh(pupilGeo, pupilMat);
+            leftPupil.position.set(0.35, 0.3, 0.33);
+            const rightPupil = new THREE.Mesh(pupilGeo, pupilMat);
+            rightPupil.position.set(0.35, 0.3, -0.33);
+
+            headGroup.add(leftEye, rightEye, leftPupil, rightPupil);
+
+            // Animated Lower Jaw
+            tRexJaw = new THREE.Group();
+            tRexJaw.position.set(0.1, -0.05, 0);
+
+            const jawGeo = new THREE.BoxGeometry(0.8, 0.15, 0.45);
+            const jawMesh = new THREE.Mesh(jawGeo, mainMat);
+            jawMesh.position.set(0.4, 0, 0);
+            tRexJaw.add(jawMesh);
+
+            // Sharp Teeth
+            const toothGeo = new THREE.ConeGeometry(0.04, 0.12, 4);
+            for (let i = 0; i < 5; i++) {
+                const toothUpper = new THREE.Mesh(toothGeo, toothMat);
+                toothUpper.rotation.x = Math.PI;
+                toothUpper.position.set(0.3 + i * 0.12, 0.0, 0.22);
+                headGroup.add(toothUpper);
+
+                const toothLower = new THREE.Mesh(toothGeo, toothMat);
+                toothLower.position.set(0.3 + i * 0.12, 0.08, 0.18);
+                tRexJaw.add(toothLower);
+            }
+
+            headGroup.add(tRexJaw);
+            tRexGroup.add(headGroup);
+
+            // Tail Group
+            tRexTail = new THREE.Group();
+            tRexTail.position.set(-0.7, 0.8, 0);
+            const tail1Geo = new THREE.ConeGeometry(0.4, 1.2, 8);
+            const tail1 = new THREE.Mesh(tail1Geo, mainMat);
+            tail1.rotation.z = Math.PI / 2.5;
+            tail1.position.set(-0.5, -0.1, 0);
+            tRexTail.add(tail1);
+            tRexGroup.add(tRexTail);
+
+            // Legs
+            const legGeo = new THREE.CylinderGeometry(0.18, 0.1, 0.9, 8);
+            const leftLeg = new THREE.Mesh(legGeo, mainMat);
+            leftLeg.position.set(-0.1, 0.0, 0.35);
+            const rightLeg = new THREE.Mesh(legGeo, mainMat);
+            rightLeg.position.set(-0.1, 0.0, -0.35);
+            tRexGroup.add(leftLeg, rightLeg);
+
+            // Feet
+            const footGeo = new THREE.BoxGeometry(0.4, 0.1, 0.25);
+            const leftFoot = new THREE.Mesh(footGeo, mainMat);
+            leftFoot.position.set(0.05, -0.45, 0.35);
+            const rightFoot = new THREE.Mesh(footGeo, mainMat);
+            rightFoot.position.set(0.05, -0.45, -0.35);
+            tRexGroup.add(leftFoot, rightFoot);
+
+            // Tiny T-Rex Arms
+            const armGeo = new THREE.CylinderGeometry(0.06, 0.03, 0.35, 6);
+            const leftArm = new THREE.Mesh(armGeo, mainMat);
+            leftArm.rotation.z = -Math.PI / 3;
+            leftArm.position.set(0.45, 0.75, 0.35);
+
+            const rightArm = new THREE.Mesh(armGeo, mainMat);
+            rightArm.rotation.z = -Math.PI / 3;
+            rightArm.position.set(0.45, 0.75, -0.35);
+            tRexGroup.add(leftArm, rightArm);
+
+            // Initial Group Placement & Rotation facing user
+            tRexGroup.rotation.y = Math.PI / 6;
+            tRexScene.add(tRexGroup);
+        }
+
+        function animate3DTRex() {
+            animationFrameId = requestAnimationFrame(animate3DTRex);
+            const time = Date.now() * 0.003;
+
+            if (tRexGroup) {
+                // Subtle breathing and tail sway animation
+                tRexGroup.position.y = Math.sin(time * 2) * 0.05;
+                if (tRexTail) tRexTail.rotation.y = Math.sin(time * 1.5) * 0.15;
+                if (tRexJaw) tRexJaw.rotation.z = -Math.abs(Math.sin(time * 2.5)) * 0.18;
+            }
+
+            if (tRexRenderer && tRexScene && tRexCamera) {
+                tRexRenderer.render(tRexScene, tRexCamera);
+            }
+        }
+
+        function randomizeMonster() {
+            const randomSkin = tRexSkins[Math.floor(Math.random() * tRexSkins.length)];
+            buildTRexMesh(randomSkin);
+        }
 
         async function initModel() {
             video = document.getElementById('webcam-video');
@@ -388,6 +565,7 @@
                 
                 modelLoading.classList.add('hidden');
                 startBtn.classList.remove('hidden');
+                init3DTRex();
                 window.requestAnimationFrame(loop);
             } catch (e) {
                 console.error(e);
@@ -746,16 +924,12 @@
         function triggerMonsterAttack() {
             monsterSprite.classList.add('attack');
             document.body.classList.add('damage'); 
+            if (tRexJaw) tRexJaw.rotation.z = -0.5; // Roar wide open on attack
         }
 
         function resetMonster() {
             monsterSprite.classList.remove('attack');
             document.body.classList.remove('damage');
-        }
-
-        function randomizeMonster() {
-            const randomSvg = monsters[Math.floor(Math.random() * monsters.length)];
-            monsterSprite.innerHTML = randomSvg;
         }
 
         function loseGame() {
